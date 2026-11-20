@@ -907,7 +907,7 @@
   <p>屿上寻光·忆语</p>
 </div>
 
-
+<audio id="bgm" loop preload="none" data-src="bgm.m4a"></audio>
 
 <div id="error" role="alert">
   <div>
@@ -8871,9 +8871,12 @@ window.WT = window.WT || {};
     function playBackgroundMusic() {
       const bgm = ui.bgm;
       if (!bgm) return;
-      const src = bgm.getAttribute('data-bgm');
-      if (!src || src.indexOf('data:') !== 0) return;
-      if (!bgm.getAttribute('src')) bgm.setAttribute('src', src);
+      const src = bgm.getAttribute('data-src') || bgm.getAttribute('data-bgm');
+      if (!src) return;
+      if (!bgm.getAttribute('src')) {
+        bgm.setAttribute('src', src);
+        try { bgm.load(); } catch (err) { /* audio is optional */ }
+      }
       bgm.loop = true;
       bgm.volume = 0.62;
       try {
