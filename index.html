@@ -5,6 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#0a1016" />
 <title>屿上寻光·忆语</title>
+<script>
+/* 手机竖屏容器默认横屏：把舞台旋转 90°。?land=0 关闭，?land=1 强制开启。 */
+(function () {
+  var m = /[?&]land=(0|1)/.exec(location.search);
+  if (m && m[1] === '0') return;
+  var touch = (navigator.maxTouchPoints || 0) > 0 ||
+    (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  var portrait = window.matchMedia ? window.matchMedia('(orientation: portrait)').matches
+    : window.innerHeight > window.innerWidth;
+  if (m ? m[1] === '1' : (touch && portrait)) {
+    document.documentElement.classList.add('force-land');
+  }
+})();
+</script>
 <style>
   :root{
     --ink:#f4efe3;
@@ -783,6 +797,27 @@
     #touch-island.is-ready{animation:none}
     .touch-ui, #touch-interact, #touch-prompt, #touch-note{transition:none}
   }
+
+  /* =========================================================================
+     强制横屏：竖屏 WebView（微信内置浏览器等不允许转屏）里把整个舞台旋转 90°，
+     舞台宽度 = 视口高，高度 = 视口宽，于是竖着拿手机也能玩横屏画面。
+     关闭：网址后加 ?land=0；强制开启：?land=1。
+     ========================================================================= */
+  html.force-land, html.force-land body{overscroll-behavior:none}
+  html.force-land body{
+    position:fixed; top:0; left:0;
+    width:100vh; height:100vw;
+    transform-origin:top left;
+    transform:rotate(-90deg) translateX(-100%);
+    overflow:hidden;
+  }
+  html.force-land #touch-joystick{width:104px;height:104px;left:calc(12px + env(safe-area-inset-left));bottom:calc(12px + env(safe-area-inset-bottom))}
+  html.force-land .touch-actions{right:calc(12px + env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom))}
+  html.force-land #touch-jump{width:58px;height:58px}
+  html.force-land #touch-run{width:50px;height:50px}
+  html.force-land #touch-interact{width:68px;min-height:68px}
+  html.force-land #touch-island{bottom:calc(12px + env(safe-area-inset-bottom) + 132px);min-height:48px}
+  html.force-land #touch-prompt{bottom:calc(12px + env(safe-area-inset-bottom) + 186px);max-width:min(210px, calc(100vh - 140px))}
 </style>
 </head>
 <body>
@@ -8385,6 +8420,38 @@ window.WT = window.WT || {};
   const isMobile = coarse || Math.min(window.innerWidth, window.innerHeight) < 680;
   const MAX_PIXEL_RATIO = 2.0;
 
+  /* ---------------------------------------------------------------------------
+     Forced landscape. WeChat/iOS webviews never fire a rotation, so on a coarse
+     pointer in portrait we rotate the whole stage with CSS and swap the renderer
+     dimensions; pointer deltas are mapped back into stage space below.
+     --------------------------------------------------------------------------- */
+  const landOverride = (function () {
+    const m = /[?&]land=(0|1)/.exec(location.search);
+    return m ? m[1] : null;
+  })();
+  const portraitMQ = window.matchMedia ? window.matchMedia('(orientation: portrait)') : null;
+
+  function wantsLandscape() {
+    if (landOverride === '0') return false;
+    if (landOverride === '1') return true;
+    return touchMode && !!portraitMQ && portraitMQ.matches;
+  }
+
+  function syncLandscape() {
+    const on = wantsLandscape();
+    document.documentElement.classList.toggle('force-land', on);
+    return on;
+  }
+
+  function viewSize() {
+    if (document.documentElement.classList.contains('force-land')) {
+      return { w: window.innerHeight, h: window.innerWidth, rotated: true };
+    }
+    return { w: window.innerWidth, h: window.innerHeight, rotated: false };
+  }
+
+  syncLandscape();
+
   const clamp = WT.clamp;
   const lerp = WT.lerp;
   const damp = WT.damp;
@@ -8414,7 +8481,8 @@ window.WT = window.WT || {};
     scene.background = new T.Color(0x9cc2d8);
     scene.fog = new T.FogExp2(0xbcd7e4, 0.0022);
 
-    const camera = new T.PerspectiveCamera(56, window.innerWidth / window.innerHeight, 0.1, 5000);
+    const bootView = viewSize();
+    const camera = new T.PerspectiveCamera(56, bootView.w / Math.max(1, bootView.h), 0.1, 5000);
 
     let renderer;
     try {
@@ -8431,7 +8499,7 @@ window.WT = window.WT || {};
     }
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
-    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    renderer.setSize(bootView.w, bootView.h, false);
     renderer.setClearColor(0x0a1015, 1);
     renderer.autoClear = true;
     renderer.autoClearColor = true;
@@ -9070,10 +9138,14 @@ window.WT = window.WT || {};
     function onPointerMove(e) {
       const p = pointers.get(e.pointerId);
       if (!p) return;
-      const dx = e.clientX - p.x;
-      const dy = e.clientY - p.y;
+      const sdx = e.clientX - p.x;
+      const sdy = e.clientY - p.y;
       p.x = e.clientX;
       p.y = e.clientY;
+      /* stage = R(+90) * screen when the stage is rotated -90deg */
+      const rotated = document.documentElement.classList.contains('force-land');
+      const dx = rotated ? -sdy : sdx;
+      const dy = rotated ? sdx : sdy;
 
       if (pointers.size >= 2) {
         const d = pointerDistance();
@@ -9106,10 +9178,12 @@ window.WT = window.WT || {};
     }
 
     function onResize() {
-      camera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
+      syncLandscape();
+      const v = viewSize();
+      camera.aspect = v.w / Math.max(1, v.h);
       camera.updateProjectionMatrix();
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
-      renderer.setSize(window.innerWidth, window.innerHeight, false);
+      renderer.setSize(v.w, v.h, false);
     }
 
     /* ---------------------------------------------------------------------
@@ -9148,8 +9222,11 @@ window.WT = window.WT || {};
     }
 
     function moveJoystick(clientX, clientY) {
-      const dx = clientX - joy.cx;
-      const dy = clientY - joy.cy;
+      const sdx = clientX - joy.cx;
+      const sdy = clientY - joy.cy;
+      const rotated = document.documentElement.classList.contains('force-land');
+      const dx = rotated ? -sdy : sdx;
+      const dy = rotated ? sdx : sdy;
       const dist = Math.hypot(dx, dy);
       if (dist < 0.001) {
         touchMove.x = 0;
